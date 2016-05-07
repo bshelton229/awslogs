@@ -68,7 +68,7 @@ class AWSLogs(object):
             if re.match(reg, stream):
                 yield stream
 
-    def list_logs(self):
+    def list_logs(self, exit=None):
         streams = []
         if self.log_stream_name != self.ALL_WILDCARD:
             streams = list(self._get_streams_from_pattern(self.log_group_name, self.log_stream_name))
@@ -84,13 +84,16 @@ class AWSLogs(object):
         max_stream_length = max([len(s) for s in streams]) if streams else 10
         group_length = len(self.log_group_name)
 
-        queue, exit = Queue(), Event()
+        queue = Queue()
+        if not exit:
+            exit = Event()
 
         # Note: filter_log_events paginator is broken
         # ! Error during pagination: The same next token was received twice
 
         def consumer():
             while not exit.is_set():
+                print('Consuming from queue')
                 event = queue.get()
 
                 if event is None:
@@ -130,6 +133,8 @@ class AWSLogs(object):
                 output.append(event['message'])
                 print(' '.join(output))
 
+            print('Leaving consumer')
+
         def generator():
             """Push events into queue trying to deduplicate them using a lru queue.
             AWS API stands for the interleaved parameter that:
@@ -161,6 +166,7 @@ class AWSLogs(object):
                 kwargs['filterPattern'] = self.filter_pattern
 
             while not exit.is_set():
+                print('Gathering data')
                 response = self.client.filter_log_events(**kwargs)
 
                 for event in response.get('events', []):
@@ -177,6 +183,8 @@ class AWSLogs(object):
                         queue.put(None)
                         break
 
+            queue.put(None)
+
         g = Thread(target=generator)
         g.start()
 
@@ -186,6 +194,7 @@ class AWSLogs(object):
         try:
             while not exit.is_set():
                 time.sleep(.1)
+            print('Leaving watcher')
         except (KeyboardInterrupt, SystemExit):
             exit.set()
             print('Closing...\n')
